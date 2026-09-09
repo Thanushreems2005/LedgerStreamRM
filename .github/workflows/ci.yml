@@ -11,6 +11,21 @@ jobs:
     name: Python Regression Tests & Syntax Check
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ledger
+          POSTGRES_PASSWORD: ledger
+          POSTGRES_DB: ledgerstream
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -25,11 +40,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r ledgerstream/ledgerstream/consumer/requirements.txt
 
+      - name: Initialize PostgreSQL database schema
+        run: |
+          PGPASSWORD=ledger psql -h localhost -p 5433 -U ledger -d ledgerstream -f ledgerstream/ledgerstream/init-db/schema.sql
+
       - name: Validate Python syntax
         run: |
           python -m py_compile ledgerstream/ledgerstream/consumer/ledger_consumer.py
-          python -m py_compile ledgerstream/ledgerstream/consumer/risk_model.py
           python -m py_compile ledgerstream/ledgerstream/fraud/fraud_consumer.py
+          python -m py_compile ledgerstream/ledgerstream/fraud/features.py
 
       - name: Run regression test suite (33 tests)
         run: |
