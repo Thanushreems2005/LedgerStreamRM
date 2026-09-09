@@ -1,0 +1,73 @@
+name: LedgerStream RM CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  python-tests:
+    name: Python Regression Tests & Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ledgerstream/ledgerstream/consumer/requirements.txt
+
+      - name: Validate Python syntax
+        run: |
+          python -m py_compile ledgerstream/ledgerstream/consumer/ledger_consumer.py
+          python -m py_compile ledgerstream/ledgerstream/consumer/risk_model.py
+          python -m py_compile ledgerstream/ledgerstream/fraud/fraud_consumer.py
+
+      - name: Run regression test suite (33 tests)
+        run: |
+          python -m unittest tests/regression_tests.py
+        working-directory: ledgerstream/ledgerstream
+
+  frontend-build:
+    name: Frontend Install & Production Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ledgerstream/ledgerstream/frontend
+
+      - name: Build frontend production bundle
+        run: npm run build
+        working-directory: ledgerstream/ledgerstream/frontend
+
+  docker-build:
+    name: Docker Container Build Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t ledgerstream-rm:ci -f ledgerstream/ledgerstream/Dockerfile ledgerstream/ledgerstream
