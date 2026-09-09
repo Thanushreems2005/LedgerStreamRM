@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchBalances,
   fetchTransactions,
@@ -129,12 +129,14 @@ const TIME_RANGES = {
   "30D": { ms: 30 * 24 * 60 * 60 * 1000 },
 };
 
-function inRange(createdAt, range) {
+function inRange(createdAt, range, referenceTime) {
+  if (!createdAt) return true;
   const t = new Date(createdAt).getTime();
   if (Number.isNaN(t)) return true;
   const cfg = TIME_RANGES[range];
   if (!cfg) return true;
-  return Date.now() - t <= cfg.ms;
+  const ref = referenceTime || Date.now();
+  return ref - t <= cfg.ms;
 }
 
 function ToastContainer({ toasts, onDismiss }) {
@@ -163,8 +165,8 @@ function TopNav({ page, onNav, heldCount, blockedCount, connected }) {
         onClick={() => { onNav(n.key); setMenuOpen(false); }}
       >
         {n.label}
-        {n.key === "Risk Intelligence" && heldCount > 0 && <span className="nav-badge amber">{heldCount}</span>}
-        {n.key === "Alerts" && blockedCount > 0 && <span className="nav-badge">{blockedCount}</span>}
+        {n.key === "Risk Intelligence" && heldCount > 0 && <span className="nav-badge amber">{heldCount >= 200 ? `${(Math.floor(heldCount / 100) * 100).toLocaleString()}+` : heldCount.toLocaleString()}</span>}
+        {n.key === "Alerts" && blockedCount > 0 && <span className="nav-badge">{blockedCount >= 200 ? `${(Math.floor(blockedCount / 100) * 100).toLocaleString()}+` : blockedCount.toLocaleString()}</span>}
       </button>
     );
   }
@@ -196,9 +198,27 @@ function TopNav({ page, onNav, heldCount, blockedCount, connected }) {
   );
 }
 
+const STREAM_MIN = 10;
+const STREAM_MAX = 25;
+const STREAM_INTERVAL_MS = 400;
+
 function DemoControl({ onSeed, seeding, demo, connected }) {
-  const last = demo?.lastTxn;
-  const processing = demo?.status === "processing";
+  const last        = demo?.lastTxn;
+  const streaming   = demo?.status === "streaming";
+  const done        = demo?.status === "done";
+  const progress    = demo?.progress ?? 0;
+  const submitted   = demo?.submitted ?? 0;
+  const failed      = demo?.failed ?? 0;
+  // batchSize is set per-click so each stream can be a different size
+  const batchSize   = demo?.batchSize ?? STREAM_MAX;
+
+  let btnLabel;
+  if (streaming) {
+    btnLabel = `\u23F3 Generating\u2026 ${progress} / ${batchSize}`;
+  } else {
+    btnLabel = "\u26A1 Generate Test Transactions";
+  }
+
   return (
     <div className="demo-control">
       <div className="demo-control-main">
@@ -207,32 +227,46 @@ function DemoControl({ onSeed, seeding, demo, connected }) {
           onClick={onSeed}
           disabled={seeding || !connected}
         >
-          {processing ? "Processing…" : "\u26A1 Generate Test Transaction"}
+          {btnLabel}
         </button>
         <span className="demo-hint">
-          publishes one real event {"\u2192"} Kafka {"\u2192"} ML risk scoring {"\u2192"} policy {"\u2192"} PostgreSQL
+          streams {STREAM_MIN}\u2013{STREAM_MAX} real events {"\u2192"} Kafka {"\u2192"} ML risk scoring {"\u2192"} policy {"\u2192"} PostgreSQL
         </span>
       </div>
-      {processing && (
+
+      {streaming && (
         <div className="demo-status demo-status-processing">
-          <span className="demo-status-item">{"\u26A0"} Processing new transaction through the live pipeline…</span>
+          <span className="demo-status-item">
+            {"\u26A1"} Submitting test stream\u2026 {progress} / {batchSize} events sent to pipeline
+          </span>
+          <span className="demo-status-item dim" style={{ fontSize: "0.72rem" }}>
+            Each event flows through Kafka {"\u2192"} risk engine {"\u2192"} PostgreSQL
+          </span>
         </div>
       )}
-      {last && !processing && (
+
+      {done && !streaming && (submitted > 0 || failed > 0) && (
         <div className="demo-status">
-          <span className="demo-status-title">Last transaction processed</span>
-          <span className="demo-status-item">
-            {timeAgo(last.created_at)}
+          <span className="demo-status-title">
+            {failed === 0
+              ? `\u2713 Stream complete — ${submitted} events submitted`
+              : `\u2713 ${submitted} submitted \u00B7 \u26A0 ${failed} failed`}
           </span>
-          <span className="demo-status-item">
-            Risk score: <b>{last.risk_score != null ? formatPct(last.risk_score) : "\u2014"}</b>
-          </span>
-          <span className="demo-status-item">
-            Decision: {statusBadge(last.decision)} {levelBadge(last.risk_level)}
-          </span>
-          <span className="demo-status-item mono dim">{last.event_id}</span>
+          {last && (
+            <>
+              <span className="demo-status-item">Last confirmed: {timeAgo(last.created_at)}</span>
+              <span className="demo-status-item">
+                Risk score: <b>{last.risk_score != null ? formatPct(last.risk_score) : "\u2014"}</b>
+              </span>
+              <span className="demo-status-item">
+                Decision: {statusBadge(last.decision)} {levelBadge(last.risk_level)}
+              </span>
+              <span className="demo-status-item mono dim">{last.event_id}</span>
+            </>
+          )}
         </div>
       )}
+
       {demo?.status === "error" && (
         <div className="demo-status demo-status-error">
           <span className="demo-status-item">{"\u26A0"} {demo.error}</span>
@@ -266,17 +300,26 @@ function OverviewPage({ stats, txns, alerts, config, lag, balances, onSelectTxn,
   const medCount = held;
   const highCount = blocked + declined;
   const donutTotal = lowCount + medCount + highCount || 1;
-  const lowPct = lowCount / donutTotal;
-  const medPct = medCount / donutTotal;
+
+  const lowPctVal = (lowCount / donutTotal) * 100;
+  const medPctVal = (medCount / donutTotal) * 100;
+  const highPctVal = (highCount / donutTotal) * 100;
 
   const donutStops = [
-    { color: "#10B981", from: 0, to: lowPct * 100 },
-    { color: "#C78A1F", from: lowPct * 100, to: (lowPct + medPct) * 100 },
-    { color: "#D64545", from: (lowPct + medPct) * 100, to: 100 },
-  ].filter((s) => s.to - s.from > 0.01);
-  const gradStr = donutStops
-    .map((s, i) => `${s.color} ${i === 0 ? 0 : s.from}% ${i === donutStops.length - 1 ? 100 : s.to}%`)
-    .join(", ");
+    { color: "#10B981", pct: lowPctVal },
+    { color: "#C78A1F", pct: medPctVal },
+    { color: "#D64545", pct: highPctVal },
+  ].filter((s) => s.pct > 0.1);
+
+  let currentDeg = 0;
+  const conicStops = donutStops.map((s) => {
+    const start = currentDeg;
+    currentDeg += s.pct * 3.6;
+    return `${s.color} ${start}deg ${currentDeg}deg`;
+  });
+  const donutGradient = conicStops.length > 0
+    ? `conic-gradient(${conicStops.join(", ")})`
+    : "conic-gradient(var(--cream-3) 0deg 360deg)";
 
   const stream = rangeTxns.slice(0, 8);
   const ledgerLag = Number(lag?.ledger?.lag ?? 0);
@@ -421,19 +464,8 @@ function OverviewPage({ stats, txns, alerts, config, lag, balances, onSelectTxn,
               <div className="a-card-title">Risk Distribution</div>
               <div className="a-card-meta">by transaction count</div>
               <div className="donut-wrap">
-                <div className="donut">
-                  <svg viewBox="0 0 160 160" width="158" height="158">
-                    <circle cx="80" cy="80" r="60" fill="none" stroke="var(--cream-3)" strokeWidth="12" />
-                    <circle
-                      cx="80" cy="80" r="60"
-                      fill="none" stroke={gradStr}
-                      strokeWidth="12"
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: "stroke .5s ease" }}
-                    />
-                  </svg>
-                  <div className="donut-center">
+                <div className="donut" style={{ background: donutGradient, borderRadius: "50%" }}>
+                  <div className="donut-center" style={{ background: "var(--panel-2)", borderRadius: "50%", margin: "14px" }}>
                     <strong>{donutTotal.toLocaleString()}</strong>
                     <span>total</span>
                   </div>
@@ -443,11 +475,11 @@ function OverviewPage({ stats, txns, alerts, config, lag, balances, onSelectTxn,
                     { label: "Low Risk", value: lowCount, color: "#10B981" },
                     { label: "Medium Risk", value: medCount, color: "#C78A1F" },
                     { label: "High Risk", value: highCount, color: "#D64545" },
-                  ].filter((i) => i.value > 0).map((i) => (
+                  ].map((i) => (
                     <div key={i.label} className="legend-row">
                       <span className="legend-dot" style={{ background: i.color }} />
-                      {i.label}
-                      <span className="legend-count">{i.value.toLocaleString()}</span>
+                      <span className="legend-label">{i.label}</span>
+                      <span className="legend-val mono">{i.value.toLocaleString()}</span>
                     </div>
                   ))}
                 </div>
@@ -557,18 +589,65 @@ function OverviewPage({ stats, txns, alerts, config, lag, balances, onSelectTxn,
   );
 }
 
-function LiveTransactionsPage({ txns, alerts, onSelectTxn, selectedTxnId, config, recentlySent }) {
+const PAGE_SIZE = 200;
+
+// Compact pagination bar — uses only existing design-system classes.
+function PaginationBar({ page, totalPages, totalCount, onPrev, onNext, loading }) {
+  if (totalPages <= 1 && totalCount <= PAGE_SIZE) return null;
+  const from = (page - 1) * PAGE_SIZE + 1;
+  const to   = Math.min(page * PAGE_SIZE, totalCount);
+  return (
+    <div className="pagination-bar">
+      <span className="pagination-info">
+        {loading ? "Loading…" : `Showing ${from.toLocaleString()}–${to.toLocaleString()} of ${totalCount.toLocaleString()}`}
+      </span>
+      <div className="pagination-controls">
+        <button className="pagination-btn" onClick={onPrev} disabled={page <= 1 || loading}>← Previous</button>
+        <span className="pagination-page">Page {page} of {totalPages.toLocaleString()}</span>
+        <button className="pagination-btn" onClick={onNext} disabled={page >= totalPages || loading}>Next →</button>
+      </div>
+    </div>
+  );
+}
+
+function LiveTransactionsPage({ alerts, onSelectTxn, selectedTxnId, config, recentlySent, timeRange, stats }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [levelFilter, setLevelFilter] = useState("all");
   const [bandFilter, setBandFilter] = useState("all");
+  const [page, setPage]     = useState(1);
+  const [pageTxns, setPageTxns]   = useState([]);
+  const [loading, setLoading]     = useState(false);
 
-  const filtered = txns.filter((t) => {
+  // Total all-transaction count comes from the real backend stats.
+  const totalCount  = stats?.analyzed != null ? Number(stats.analyzed) : 0;
+  const totalPages  = totalCount > 0 ? Math.ceil(totalCount / PAGE_SIZE) : 1;
+
+  // Reset to page 1 whenever the time range changes.
+  useEffect(() => { setPage(1); }, [timeRange]);
+
+  // Fetch the correct page slice from the backend whenever page or timeRange changes.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const offset = (page - 1) * PAGE_SIZE;
+        const result = await fetchTransactions(PAGE_SIZE, timeRange, null, offset);
+        if (!cancelled) setPageTxns(result.transactions || []);
+      } catch { /* keep last data on error */ }
+      if (!cancelled) setLoading(false);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [page, timeRange]);
+
+  const filtered = pageTxns.filter((t) => {
     const level = t.risk_level || "LOW";
-    const band = t.amount_band || amountBandFor(t.amount, config);
+    const band  = t.amount_band || amountBandFor(t.amount, config);
     if (statusFilter !== "all" && t.status !== statusFilter) return false;
-    if (levelFilter !== "all" && level !== levelFilter) return false;
-    if (bandFilter !== "all" && band !== bandFilter) return false;
+    if (levelFilter  !== "all" && level !== levelFilter)     return false;
+    if (bandFilter   !== "all" && band  !== bandFilter)      return false;
     if (search) {
       const q = search.toLowerCase();
       if (!t.event_id.toLowerCase().includes(q) &&
@@ -603,9 +682,16 @@ function LiveTransactionsPage({ txns, alerts, onSelectTxn, selectedTxnId, config
           <option value="HIGH">HIGH</option>
         </select>
         <span className="dim" style={{ fontSize: 11, marginLeft: 4, alignSelf: "center" }}>
-          {filtered.length} / {txns.length} transactions
+          {filtered.length.toLocaleString()} shown
         </span>
       </div>
+
+      <PaginationBar
+        page={page} totalPages={totalPages} totalCount={totalCount}
+        onPrev={() => setPage((p) => Math.max(1, p - 1))}
+        onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+        loading={loading}
+      />
 
       <div className="card">
         <div className="table-wrap">
@@ -623,11 +709,13 @@ function LiveTransactionsPage({ txns, alerts, onSelectTxn, selectedTxnId, config
               </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, 100).map((t) => {
+              {filtered.map((t) => {
                 const score = t.risk_score != null ? Number(t.risk_score) : null;
-                const band = t.amount_band || amountBandFor(t.amount, config);
+                const band  = t.amount_band || amountBandFor(t.amount, config);
                 return (
-                  <tr key={t.event_id} className={`clickable ${t.event_id === selectedTxnId ? "selected" : ""} ${recentlySent && recentlySent.includes(t.event_id) ? "just-now" : ""}`} onClick={() => onSelectTxn(t.event_id)}>
+                  <tr key={t.event_id}
+                      className={`clickable ${t.event_id === selectedTxnId ? "selected" : ""} ${recentlySent && recentlySent.includes(t.event_id) ? "just-now" : ""}`}
+                      onClick={() => onSelectTxn(t.event_id)}>
                     <td className="mono dim" style={{ fontSize: 10.5 }}>{t.event_id.length > 14 ? t.event_id.slice(0, 14) + "…" : t.event_id}</td>
                     <td style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{formatINR(t.amount)}</td>
                     <td>{amountBandBadge(band)}</td>
@@ -641,21 +729,62 @@ function LiveTransactionsPage({ txns, alerts, onSelectTxn, selectedTxnId, config
                   </tr>
                 );
               })}
-              {filtered.length === 0 && (
+              {filtered.length === 0 && !loading && (
                 <tr><td colSpan={8}><div className="empty-state">No transactions match your filters</div></td></tr>
+              )}
+              {loading && filtered.length === 0 && (
+                <tr><td colSpan={8}><div className="empty-state">Loading…</div></td></tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      <PaginationBar
+        page={page} totalPages={totalPages} totalCount={totalCount}
+        onPrev={() => setPage((p) => Math.max(1, p - 1))}
+        onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+        loading={loading}
+      />
     </div>
   );
 }
 
-function ReviewQueuePage({ txns, alerts, onAction, actionPending, onSelectTxn, config }) {
-  const held = txns.filter((t) => t.status === "held");
+function ReviewQueuePage({ alerts, onAction, actionPending, onSelectTxn, config, stats, timeRange }) {
+  const [page, setPage]       = useState(1);
+  const [heldTxns, setHeldTxns] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  if (held.length === 0) {
+  // Cumulative total from stats (source of truth for pagination math).
+  const totalHeldCount = stats?.heldCount != null ? Number(stats.heldCount) : 0;
+  const totalPages     = totalHeldCount > 0 ? Math.ceil(totalHeldCount / PAGE_SIZE) : 1;
+
+  // Reset to page 1 when time range changes.
+  useEffect(() => { setPage(1); }, [timeRange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const offset = (page - 1) * PAGE_SIZE;
+        const result = await fetchTransactions(PAGE_SIZE, timeRange, "held", offset);
+        if (!cancelled) setHeldTxns(result.transactions || []);
+      } catch { /* keep last data */ }
+      if (!cancelled) setLoading(false);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [page, timeRange]);
+
+  const displayTotalHeld = totalHeldCount >= 500
+    ? `${(Math.floor(totalHeldCount / 100) * 100).toLocaleString()}+`
+    : totalHeldCount.toLocaleString();
+  const displayRecentHeld = heldTxns.length >= 200
+    ? `${(Math.floor(heldTxns.length / 100) * 100).toLocaleString()}+ SHOWN`
+    : `${heldTxns.length} SHOWN`;
+
+  if (!loading && heldTxns.length === 0 && page === 1) {
     return (
       <div className="card">
         <div className="empty-state" style={{ padding: "60px 20px" }}>
@@ -671,11 +800,26 @@ function ReviewQueuePage({ txns, alerts, onAction, actionPending, onSelectTxn, c
     <div>
       <div className="info-banner">
         <span>{"\u23F8"}</span>
-        <span>{held.length} payment{held.length > 1 ? "s" : ""} are held {"\u2014"} the risk engine flagged them as MEDIUM risk. Review and settle, or decline.</span>
+        <span>{displayTotalHeld} payment{totalHeldCount !== 1 ? "s" : ""} are held {"\u2014"} the risk engine flagged them as MEDIUM risk. Review and settle, or decline.</span>
       </div>
 
-      <div className="page-grid">
-        {held.map((tx) => {
+      <div className="alerts-section-head" style={{ marginBottom: 8 }}>
+        <div>
+          <div className="alerts-section-title">Medium Risk Review Queue</div>
+          <div className="alerts-section-sub">Transactions held by the risk engine awaiting review and settlement decision.</div>
+        </div>
+        <div className="alerts-count">{displayRecentHeld} ({displayTotalHeld} TOTAL HELD)</div>
+      </div>
+
+      <PaginationBar
+        page={page} totalPages={totalPages} totalCount={totalHeldCount}
+        onPrev={() => setPage((p) => Math.max(1, p - 1))}
+        onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+        loading={loading}
+      />
+
+      <div className="page-grid" style={{ marginTop: 12 }}>
+        {heldTxns.map((tx) => {
           const a = alerts.find((x) => x.event_id === tx.event_id);
           const score = tx.risk_score != null ? Number(tx.risk_score) : (a ? a.risk_score : null);
           const reasons = tx.reasons ? tx.reasons.split(" \u00B7 ") : (a ? a.reasons : ["MEDIUM risk transaction flagged by AI"]);
@@ -721,18 +865,51 @@ function ReviewQueuePage({ txns, alerts, onAction, actionPending, onSelectTxn, c
             </div>
           );
         })}
+        {loading && heldTxns.length === 0 && <div className="empty-state">Loading…</div>}
       </div>
+
+      <PaginationBar
+        page={page} totalPages={totalPages} totalCount={totalHeldCount}
+        onPrev={() => setPage((p) => Math.max(1, p - 1))}
+        onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+        loading={loading}
+      />
     </div>
   );
 }
 
-function BlockedPage({ txns, alerts, config, stats }) {
-  const [expandedId, setExpandedId] = useState(null);
-  const blocked = txns.filter((t) => t.status === "blocked");
-  const blockedCount = Number(stats?.blockedCount ?? blocked.length);
-  const totalBlocked = Number(stats?.blockedValue ?? blocked.reduce((s, t) => s + Number(t.amount), 0));
+function BlockedPage({ alerts, config, stats, timeRange }) {
+  const [expandedId, setExpandedId]   = useState(null);
+  const [page, setPage]               = useState(1);
+  const [blockedData, setBlockedData] = useState([]);
+  const [loading, setLoading]         = useState(false);
 
-  if (blocked.length === 0) {
+  // Cumulative total from stats — source of truth for pagination.
+  const blockedCount  = stats?.blockedCount != null ? Number(stats.blockedCount) : 0;
+  const totalBlocked  = Number(stats?.blockedValue ?? 0);
+  const totalPages    = blockedCount > 0 ? Math.ceil(blockedCount / PAGE_SIZE) : 1;
+
+  // Reset to page 1 when time range changes.
+  useEffect(() => { setPage(1); }, [timeRange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const offset = (page - 1) * PAGE_SIZE;
+        const result = await fetchTransactions(PAGE_SIZE, timeRange, "blocked", offset);
+        if (!cancelled) setBlockedData(result.transactions || []);
+      } catch { /* keep last data */ }
+      if (!cancelled) setLoading(false);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [page, timeRange]);
+
+  const blocked = blockedData;
+
+  if (!loading && blocked.length === 0 && page === 1) {
     return (
       <div className="card">
         <div className="empty-state" style={{ padding: "60px 20px" }}>
@@ -746,6 +923,13 @@ function BlockedPage({ txns, alerts, config, stats }) {
     );
   }
 
+  const displayTotalBlocked = blockedCount >= 500
+    ? `${(Math.floor(blockedCount / 100) * 100).toLocaleString()}+`
+    : blockedCount.toLocaleString();
+  const displayRecentBlocked = blocked.length >= 200
+    ? `${(Math.floor(blocked.length / 100) * 100).toLocaleString()}+ SHOWN`
+    : `${blocked.length} SHOWN`;
+
   return (
     <div>
       <div className="alerts-summary">
@@ -753,7 +937,7 @@ function BlockedPage({ txns, alerts, config, stats }) {
           <div className="kpi-accent red" />
           <div className="alerts-summary-top">
             <span className="alerts-summary-label">Total Blocked</span>
-            <span className="alerts-summary-value red">{blockedCount}</span>
+            <span className="alerts-summary-value red">{displayTotalBlocked}</span>
           </div>
           <div className="alerts-summary-sub">Payments stopped before settlement</div>
         </div>
@@ -772,8 +956,14 @@ function BlockedPage({ txns, alerts, config, stats }) {
           <div className="alerts-section-title">High Risk Transactions</div>
           <div className="alerts-section-sub">Transactions blocked by the risk engine before settlement.</div>
         </div>
-        <div className="alerts-count">{blocked.length} RECENT</div>
+        <div className="alerts-count">{displayRecentBlocked} ({displayTotalBlocked} TOTAL BLOCKED)</div>
       </div>
+      <PaginationBar
+        page={page} totalPages={totalPages} totalCount={blockedCount}
+        onPrev={() => setPage((p) => Math.max(1, p - 1))}
+        onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+        loading={loading}
+      />
 
       <div className="alerts-grid">
         {blocked.map((tx) => {
@@ -869,108 +1059,366 @@ function BlockedPage({ txns, alerts, config, stats }) {
             </div>
           );
         })}
+        {loading && blocked.length === 0 && (
+          <div className="empty-state">Loading…</div>
+        )}
       </div>
+
+      <PaginationBar
+        page={page} totalPages={totalPages} totalCount={blockedCount}
+        onPrev={() => setPage((p) => Math.max(1, p - 1))}
+        onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+        loading={loading}
+      />
     </div>
   );
 }
 
-function AnalyticsPage({ stats, txns, alerts, config }) {
-  const applied  = Number(stats?.appliedCount  ?? 0);
-  const held     = Number(stats?.heldCount     ?? 0);
-  const blocked  = Number(stats?.blockedCount  ?? 0);
-  const declined = Number(stats?.declinedCount ?? 0);
-  const total    = applied + held + blocked + declined || 1;
+function AnalyticsPage({ stats, txns, alerts, config, timeRange = "24H", onTimeRange }) {
+  const combinedTxns = useMemo(() => {
+    const map = new Map();
+    (txns || []).forEach((t) => map.set(t.event_id, t));
+    (alerts || []).forEach((a) => {
+      const isHighBlocked = a.risk_level === "HIGH" || a.action === "BLOCK" || a.status === "blocked";
+      const existing = map.get(a.event_id);
+      if (!existing) {
+        map.set(a.event_id, {
+          event_id: a.event_id,
+          from_account: a.from_account,
+          to_account: a.to_account,
+          amount: a.amount,
+          status: isHighBlocked ? "blocked" : a.action === "VERIFY" ? "held" : "applied",
+          risk_score: a.risk_score,
+          risk_level: a.risk_level || (isHighBlocked ? "HIGH" : "MEDIUM"),
+          reasons: Array.isArray(a.reasons) ? a.reasons.join(" · ") : a.reasons,
+          created_at: a.flagged_at || new Date().toISOString(),
+        });
+      } else if (isHighBlocked) {
+        map.set(a.event_id, {
+          ...existing,
+          status: "blocked",
+          risk_level: "HIGH",
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [txns, alerts]);
 
-  const appliedAmount  = Number(stats?.appliedValue  ?? 0);
-  const blockedAmount  = Number(stats?.blockedValue  ?? 0);
-  const heldAmount     = Number(stats?.heldValue     ?? 0);
-  const declinedAmount = Number(stats?.declinedValue ?? 0);
-  const totalAmount    = appliedAmount + blockedAmount + heldAmount + declinedAmount || 1;
+  const rangeTxns = useMemo(() => {
+    return combinedTxns.filter((t) => inRange(t.created_at, timeRange));
+  }, [combinedTxns, timeRange]);
+
+  let appliedCount = 0;
+  let heldCount = 0;
+  let blockedCount = 0;
+  let declinedCount = 0;
+
+  let appliedValue = 0;
+  let heldValue = 0;
+  let blockedValue = 0;
+  let declinedValue = 0;
+
+  rangeTxns.forEach((t) => {
+    const amt = Number(t.amount) || 0;
+    const st = t.status;
+    const lvl = t.risk_level;
+
+    if (st === "blocked" || lvl === "HIGH") {
+      blockedCount++;
+      blockedValue += amt;
+    } else if (st === "held" || lvl === "MEDIUM") {
+      heldCount++;
+      heldValue += amt;
+    } else if (st === "applied" || st === "approved" || lvl === "LOW") {
+      appliedCount++;
+      appliedValue += amt;
+    } else if (st === "declined") {
+      declinedCount++;
+      declinedValue += amt;
+    }
+  });
+
+  const alertBlockedList = (alerts || []).filter((a) => a.risk_level === "HIGH" || a.action === "BLOCK" || a.status === "blocked");
+
+  const displayAppliedCount = stats?.appliedCount != null ? Number(stats.appliedCount) : appliedCount;
+  const displayHeldCount = stats?.heldCount != null ? Number(stats.heldCount) : heldCount;
+  const displayBlockedCount = Math.max(
+    stats?.blockedCount != null ? Number(stats.blockedCount) : 0,
+    blockedCount,
+    alertBlockedList.length
+  );
+  const displayDeclinedCount = stats?.declinedCount != null ? Number(stats.declinedCount) : declinedCount;
+
+  const displayAppliedValue = stats?.appliedValue != null ? Number(stats.appliedValue) : appliedValue;
+  const displayHeldValue = stats?.heldValue != null ? Number(stats.heldValue) : heldValue;
+  const displayBlockedValue = Math.max(
+    stats?.blockedValue != null ? Number(stats.blockedValue) : 0,
+    blockedValue,
+    alertBlockedList.reduce((s, a) => s + Number(a.amount || 0), 0)
+  );
+
+  const rangeTotal = stats?.analyzed != null ? Number(stats.analyzed) : (displayAppliedCount + displayHeldCount + displayBlockedCount + displayDeclinedCount);
+  const distTotal = (displayAppliedCount + displayHeldCount + displayBlockedCount + displayDeclinedCount) || 1;
+  const approvalRate = rangeTotal > 0 ? (displayAppliedCount / rangeTotal) * 100 : 0;
 
   const lowT = config?.riskPolicy?.lowThreshold ?? 0.01;
   const highT = config?.riskPolicy?.highThreshold ?? 0.10;
+  const lowPctStr = `${(lowT * 100).toFixed(0)}%`;
+  const highPctStr = `${(highT * 100).toFixed(0)}%`;
 
-  const statusBars = [
-    { label: "Approved", value: applied,  pct: applied/total,  color: "var(--green)" },
-    { label: "Held",     value: held,     pct: held/total,     color: "var(--amber)" },
-    { label: "Blocked",  value: blocked,  pct: blocked/total,  color: "var(--red)" },
-    { label: "Declined", value: declined, pct: declined/total, color: "var(--slate)" },
-  ];
+  const lowPct = (displayAppliedCount / distTotal) * 100;
+  const medPct = (displayHeldCount / distTotal) * 100;
+  const highPct = (displayBlockedCount / distTotal) * 100;
+  const decPct = (displayDeclinedCount / distTotal) * 100;
 
-  const amountBars = [
-    { label: "Approved",  value: appliedAmount,  pct: appliedAmount/totalAmount,  color: "var(--green)" },
-    { label: "Held",      value: heldAmount,     pct: heldAmount/totalAmount,     color: "var(--amber)" },
-    { label: "Blocked",   value: blockedAmount,  pct: blockedAmount/totalAmount,  color: "var(--red)" },
-    { label: "Declined",  value: declinedAmount, pct: declinedAmount/totalAmount, color: "var(--slate)" },
-  ];
+  const stops = [
+    { color: "#10B981", pct: lowPct },
+    { color: "#C78A1F", pct: medPct },
+    { color: "#D64545", pct: highPct },
+    { color: "#64706A", pct: decPct },
+  ].filter((s) => s.pct > 0.1);
+
+  let currentDeg = 0;
+  const conicStops = stops.map((s) => {
+    const start = currentDeg;
+    currentDeg += s.pct * 3.6;
+    return `${s.color} ${start}deg ${currentDeg}deg`;
+  });
+  const donutGradient = conicStops.length > 0
+    ? `conic-gradient(${conicStops.join(", ")})`
+    : "conic-gradient(var(--cream-3) 0deg 360deg)";
 
   return (
-    <div>
-      <div className="page-grid col-2" style={{ marginBottom: 16 }}>
+    <div className="analytics-page">
+      {/* 1. Page Section Header with Time-Range Controls */}
+      <div className="sec-head" style={{ marginBottom: 20 }}>
+        <div>
+          <h2 className="sec-head-title">Analytics</h2>
+          <p className="sec-head-sub">Understand how the risk engine is behaving across transactions.</p>
+        </div>
+        <div className="sec-head-right">
+          {["1H", "6H", "24H", "7D", "30D"].map((r) => (
+            <button
+              key={r}
+              className={`time-chip${timeRange === r ? " active" : ""}`}
+              onClick={() => onTimeRange && onTimeRange(r)}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 2. Risk Performance Overview */}
+      <div className="kpi-row" style={{ marginBottom: 20 }}>
+        <div className="kpi-card green">
+          <div className="kpi-accent-top green" />
+          <div className="kpi-label">Transactions</div>
+          <div className="kpi-value">{rangeTotal.toLocaleString()}</div>
+          <div className="kpi-sub">in selected window ({timeRange})</div>
+        </div>
+        <div className="kpi-card green">
+          <div className="kpi-accent-top green" />
+          <div className="kpi-label">Approval Rate</div>
+          <div className="kpi-value">{rangeTotal > 0 ? `${approvalRate.toFixed(1)}%` : "—"}</div>
+          <div className="kpi-sub">settled without intervention</div>
+        </div>
+        <div className="kpi-card amber">
+          <div className="kpi-accent-top amber" />
+          <div className="kpi-label">Held</div>
+          <div className="kpi-value">{displayHeldCount.toLocaleString()}</div>
+          <div className="kpi-sub">MEDIUM risk awaiting review</div>
+        </div>
+        <div className="kpi-card red">
+          <div className="kpi-accent-top red" />
+          <div className="kpi-label">Blocked</div>
+          <div className="kpi-value">{displayBlockedCount.toLocaleString()}</div>
+          <div className="kpi-sub">HIGH risk stopped before settlement</div>
+        </div>
+      </div>
+
+      {/* 3 & 4. Risk Distribution & Risk Score Landscape */}
+      <div className="page-grid col-2" style={{ marginBottom: 20 }}>
+        {/* Risk Distribution Card */}
         <div className="card">
           <div className="card-header">
-            <span className="card-title"><span className="dot-indicator dot-green" /> Decision Distribution</span>
-            <span className="card-meta">by transaction count</span>
+            <span className="card-title"><span className="dot-indicator dot-green" /> Risk Distribution</span>
+            <span className="card-meta">decision breakdown ({timeRange})</span>
           </div>
           <div className="card-body">
-            <div className="bar-chart">
-              {statusBars.map(({ label, value, pct, color }) => (
-                <div key={label} className="bar-row">
-                  <div className="bar-label">{label}</div>
-                  <div className="bar-track"><div className="bar-fill" style={{ width: `${pct * 100}%`, background: color }} /></div>
-                  <div className="bar-value">{value.toLocaleString()}</div>
+            <div className="donut-wrap">
+              <div className="donut" style={{ background: donutGradient, borderRadius: "50%" }}>
+                <div className="donut-center" style={{ background: "var(--panel-2)", borderRadius: "50%", margin: "14px" }}>
+                  <strong>{rangeTotal.toLocaleString()}</strong>
+                  <span>Total</span>
                 </div>
-              ))}
+              </div>
+              <div className="donut-legend">
+                <div className="legend-row">
+                  <span className="legend-dot" style={{ background: "var(--green)" }} />
+                  <span className="legend-label">Approved</span>
+                  <span className="legend-val mono">{displayAppliedCount.toLocaleString()}</span>
+                  <span className="legend-pct dim">({distTotal > 0 ? lowPct.toFixed(1) : 0}%)</span>
+                </div>
+                <div className="legend-row">
+                  <span className="legend-dot" style={{ background: "var(--amber)" }} />
+                  <span className="legend-label">Held</span>
+                  <span className="legend-val mono">{displayHeldCount.toLocaleString()}</span>
+                  <span className="legend-pct dim">({distTotal > 0 ? medPct.toFixed(1) : 0}%)</span>
+                </div>
+                <div className="legend-row">
+                  <span className="legend-dot" style={{ background: "var(--red)" }} />
+                  <span className="legend-label">Blocked</span>
+                  <span className="legend-val mono">{displayBlockedCount.toLocaleString()}</span>
+                  <span className="legend-pct dim">({distTotal > 0 ? highPct.toFixed(1) : 0}%)</span>
+                </div>
+                {displayDeclinedCount > 0 && (
+                  <div className="legend-row">
+                    <span className="legend-dot" style={{ background: "var(--slate)" }} />
+                    <span className="legend-label">Declined</span>
+                    <span className="legend-val mono">{displayDeclinedCount.toLocaleString()}</span>
+                    <span className="legend-pct dim">({distTotal > 0 ? decPct.toFixed(1) : 0}%)</span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
 
+        {/* Risk Score Landscape Card */}
         <div className="card">
           <div className="card-header">
-            <span className="card-title"><span className="dot-indicator dot-green" /> Amount Distribution</span>
-            <span className="card-meta">by transaction value</span>
+            <span className="card-title"><span className="dot-indicator dot-green" /> Risk Score Landscape</span>
+            <span className="card-meta">Model scores mapped to enforcement policy</span>
           </div>
-          <div className="card-body">
-            <div className="bar-chart">
-              {amountBars.map(({ label, value, pct, color }) => (
-                <div key={label} className="bar-row">
-                  <div className="bar-label">{label}</div>
-                  <div className="bar-track"><div className="bar-fill" style={{ width: `${pct * 100}%`, background: color }} /></div>
-                  <div className="bar-value mono" style={{ fontSize: 10 }}>{formatINR(value)}</div>
+          <div className="card-body" style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 16 }}>
+            <div className="score-landscape-bands">
+              <div className="score-band-row low">
+                <div className="score-band-header">
+                  <span className="score-band-badge low">LOW</span>
+                  <span className="score-band-range">&lt; {lowPctStr}</span>
+                  <span className="score-band-action">APPROVE &amp; SETTLE</span>
                 </div>
-              ))}
+                <div className="score-band-bar-wrap">
+                  <div className="score-band-fill low" style={{ width: `${distTotal > 0 ? Math.max(lowPct, 2) : 0}%` }} />
+                </div>
+                <div className="score-band-stats">
+                  <span>{displayAppliedCount.toLocaleString()} txns</span>
+                  <span className="mono dim">{distTotal > 0 ? lowPct.toFixed(1) : 0}% of volume</span>
+                </div>
+              </div>
+
+              <div className="score-band-row medium">
+                <div className="score-band-header">
+                  <span className="score-band-badge medium">MEDIUM</span>
+                  <span className="score-band-range">{lowPctStr} – {highPctStr}</span>
+                  <span className="score-band-action">HOLD FOR REVIEW</span>
+                </div>
+                <div className="score-band-bar-wrap">
+                  <div className="score-band-fill medium" style={{ width: `${distTotal > 0 ? Math.max(medPct, 2) : 0}%` }} />
+                </div>
+                <div className="score-band-stats">
+                  <span>{displayHeldCount.toLocaleString()} txns</span>
+                  <span className="mono dim">{distTotal > 0 ? medPct.toFixed(1) : 0}% of volume</span>
+                </div>
+              </div>
+
+              <div className="score-band-row high">
+                <div className="score-band-header">
+                  <span className="score-band-badge high">HIGH</span>
+                  <span className="score-band-range">&gt; {highPctStr}</span>
+                  <span className="score-band-action">BLOCK SETTLEMENT</span>
+                </div>
+                <div className="score-band-bar-wrap">
+                  <div className="score-band-fill high" style={{ width: `${distTotal > 0 ? Math.max(highPct, 2) : 0}%` }} />
+                </div>
+                <div className="score-band-stats">
+                  <span>{displayBlockedCount.toLocaleString()} txns</span>
+                  <span className="mono dim">{distTotal > 0 ? highPct.toFixed(1) : 0}% of volume</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="score-pipeline-tag">
+              MODEL SCORE &rarr; POLICY THRESHOLD &rarr; ENFORCEMENT ACTION
             </div>
           </div>
         </div>
       </div>
 
+      {/* 5. Settlement Outcomes */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-header">
+          <span className="card-title"><span className="dot-indicator dot-green" /> Settlement Outcomes</span>
+          <span className="card-meta">What happened to transactions after risk evaluation ({timeRange})</span>
+        </div>
+        <div className="card-body">
+          <div className="outcomes-grid">
+            <div className="outcome-card approved">
+              <div className="outcome-header">
+                <span className="badge badge-green">APPROVED</span>
+                <span className="outcome-moved yes">Money moved: YES</span>
+              </div>
+              <div className="outcome-value">{formatINR(displayAppliedValue)}</div>
+              <div className="outcome-meta">
+                <strong>{displayAppliedCount.toLocaleString()}</strong> transactions settled to destination accounts
+              </div>
+            </div>
+
+            <div className="outcome-card held">
+              <div className="outcome-header">
+                <span className="badge badge-amber">HELD</span>
+                <span className="outcome-moved no">Money moved: NO</span>
+              </div>
+              <div className="outcome-value">{formatINR(displayHeldValue)}</div>
+              <div className="outcome-meta">
+                <strong>{displayHeldCount.toLocaleString()}</strong> transactions held in review queue
+              </div>
+            </div>
+
+            <div className="outcome-card blocked">
+              <div className="outcome-header">
+                <span className="badge badge-red">BLOCKED</span>
+                <span className="outcome-moved no">Money moved: NO</span>
+              </div>
+              <div className="outcome-value">{formatINR(displayBlockedValue)}</div>
+              <div className="outcome-meta">
+                <strong>Blocked Transaction Value</strong> across {displayBlockedCount.toLocaleString()} high-risk attempts
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 6. Risk Policy Summary */}
       <div className="card">
         <div className="card-header">
           <span className="card-title"><span className="dot-indicator dot-green" /> Risk Policy</span>
-          <span className="card-meta">live from backend configuration</span>
+          <span className="card-meta">configured policy thresholds</span>
         </div>
         <div className="card-body">
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
-            {[
-              { label: "LOW Threshold", value: formatPct(lowT), note: "score < threshold \u2192 APPROVE" },
-              { label: "HIGH Threshold", value: formatPct(highT), note: "score > threshold \u2192 BLOCK" },
-            ].map(({ label, value, note }) => (
-              <div key={label} className="rule-panel">
-                <div style={{ fontSize: 9, color: "var(--slate)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>{label}</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 17, fontWeight: 700 }}>{value}</div>
-                <div style={{ fontSize: 9.5, color: "var(--slate)", marginTop: 2 }}>{note}</div>
-              </div>
-            ))}
+          <div className="policy-compact-row">
+            <div className="policy-pill-item">
+              <span className="policy-pill-score">&lt; {lowPctStr}</span>
+              <span className="badge badge-green">APPROVE</span>
+            </div>
+            <div className="policy-pill-item">
+              <span className="policy-pill-score">{lowPctStr} – {highPctStr}</span>
+              <span className="badge badge-amber">HOLD</span>
+            </div>
+            <div className="policy-pill-item">
+              <span className="policy-pill-score">&gt; {highPctStr}</span>
+              <span className="badge badge-red">BLOCK</span>
+            </div>
           </div>
-          <div style={{ marginTop: 12, fontSize: 10.5, color: "var(--slate)", fontFamily: "var(--mono)" }}>
+          <p className="policy-compact-note">
             Risk Score = estimated fraud probability from the ML model. Risk classification is driven solely by the model score against the configured policy thresholds.
-          </div>
+          </p>
         </div>
       </div>
     </div>
   );
 }
-
 function SendTransactionPage({ balances, config, connected, onSend, send, onNavigate }) {
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
@@ -1478,6 +1926,7 @@ export default function App() {
   const [page, setPage] = useState("Overview");
   const [balances, setBalances] = useState([]);
   const [txns, setTxns] = useState([]);
+  const [blockedTxns, setBlockedTxns] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [lag, setLag] = useState(null);
   const [stats, setStats] = useState(null);
@@ -1497,6 +1946,7 @@ export default function App() {
 
   const toastId = useRef(0);
   const txnsRef = useRef([]);
+  const statsRef = useRef(null);
 
   function addToast(type, msg) {
     const id = ++toastId.current;
@@ -1508,57 +1958,91 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }
 
-  async function handleSeedDemoData(count) {
+  async function handleSeedDemoData() {
+    if (seeding) return; // prevent duplicate stream launches
+    // Pick a fresh random batch size (10–25 inclusive) for every click
+    const batchSize = Math.floor(Math.random() * (STREAM_MAX - STREAM_MIN + 1)) + STREAM_MIN;
     const knownIds = new Set((txnsRef.current || []).map((t) => t.event_id));
     setSeeding(true);
-    setDemo({ status: "processing", lastTxn: null, error: null });
-    try {
-      await seedDemo(count);
+    setDemo({ status: "streaming", lastTxn: null, error: null, progress: 0, submitted: 0, failed: 0, batchSize });
 
-      // Poll the existing transaction API until the new demo event has been
-      // scored by the ML model, decided by the policy, and persisted to
-      // PostgreSQL. Only the ACTUAL persisted outcome is shown — nothing is
-      // fabricated in the frontend.
-      const deadline = Date.now() + 45000;
-      let found = null;
-      while (Date.now() < deadline) {
-        const t = await fetchTransactions(200);
-        found = (t.transactions || []).find(
-          (tx) =>
-            tx.event_id &&
-            tx.event_id.startsWith("demo-") &&
-            !knownIds.has(tx.event_id) &&
-            (tx.status === "applied" || tx.status === "held" || tx.status === "blocked")
-        );
-        if (found) break;
-        await new Promise((r) => setTimeout(r, 1500));
+    let submitted = 0;
+    let failed = 0;
+
+    // Fire batchSize individual seedDemo(1) calls at STREAM_INTERVAL_MS intervals.
+    // Each call goes through the real pipeline: Kafka → risk engine → policy → PostgreSQL.
+    // We do NOT call seedDemo(batchSize) in one shot because single-at-a-time gives visible progress.
+    for (let i = 0; i < batchSize; i++) {
+      try {
+        await seedDemo(1);
+        submitted++;
+      } catch {
+        failed++;
       }
-
-      await refreshData();
-
-      if (found) {
-        setDemo({
-          status: "done",
-          lastTxn: {
-            event_id: found.event_id,
-            amount: found.amount,
-            risk_score: found.risk_score,
-            risk_level: found.risk_level,
-            decision: found.status,
-            created_at: found.created_at,
-          },
-          error: null,
-        });
-        addToast("success", "Test transaction processed through the live pipeline.");
-      } else {
-        throw new Error("Event published but not yet persisted; check that the ledger consumer is running");
+      setDemo((prev) => ({
+        ...prev,
+        progress: i + 1,
+        submitted,
+        failed,
+      }));
+      if (i < batchSize - 1) {
+        await new Promise((r) => setTimeout(r, STREAM_INTERVAL_MS));
       }
-    } catch (e) {
-      setDemo((prev) => ({ ...prev, status: "error", error: e.message }));
-      addToast("error", `Seeding failed: ${e.message}`);
-    } finally {
-      setSeeding(false);
     }
+
+    // After submitting all events, poll the existing API until at least one
+    // new demo event is confirmed persisted by the ledger consumer.
+    // Only ACTUAL backend data is shown — nothing is fabricated.
+    const deadline = Date.now() + 45000;
+    let found = null;
+    while (Date.now() < deadline) {
+      const t = await fetchTransactions(200);
+      found = (t.transactions || []).find(
+        (tx) =>
+          tx.event_id &&
+          tx.event_id.startsWith("demo-") &&
+          !knownIds.has(tx.event_id) &&
+          (tx.status === "applied" || tx.status === "held" || tx.status === "blocked")
+      );
+      if (found) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+
+    await refreshData(undefined, true);
+
+    if (submitted === 0) {
+      setDemo((prev) => ({
+        ...prev,
+        status: "error",
+        error: `All ${batchSize} events failed to submit. Check that the API and Kafka are reachable.`,
+      }));
+      addToast("error", "Stream failed — no events could be submitted.");
+    } else {
+      setDemo({
+        status: "done",
+        batchSize,
+        progress: batchSize,
+        submitted,
+        failed,
+        lastTxn: found
+          ? {
+              event_id:   found.event_id,
+              amount:     found.amount,
+              risk_score: found.risk_score,
+              risk_level: found.risk_level,
+              decision:   found.status,
+              created_at: found.created_at,
+            }
+          : null,
+        error: null,
+      });
+      const msg = failed === 0
+        ? `${submitted} test events submitted through the live pipeline.`
+        : `${submitted} submitted, ${failed} failed — check consumer logs.`;
+      addToast(failed === 0 ? "success" : "error", msg);
+    }
+
+    setSeeding(false);
   }
 
   async function handleSendTransaction(payload) {
@@ -1579,7 +2063,7 @@ export default function App() {
         await new Promise((r) => setTimeout(r, 1500));
       }
 
-      await refreshData();
+      await refreshData(undefined, true);
 
       if (found) {
         setSend({ status: "done", result: found, error: null });
@@ -1597,24 +2081,29 @@ export default function App() {
     }
   }
 
-  const refreshData = useCallback(async (rangeOverride) => {
+  const refreshData = useCallback(async (rangeOverride, isExplicit = false) => {
     try {
       const range = rangeOverride || timeRangeRef.current;
-      const [b, t, a, l, s, c] = await Promise.all([
+      const [b, t, a, l, s, c, bt] = await Promise.all([
         fetchBalances(),
         fetchTransactions(200, range),
         fetchAlerts(),
         fetchLag(),
         fetchStats(range),
         fetchConfig(),
+        fetchTransactions(200, range, "blocked"),
       ]);
       setBalances(b.accounts);
       setTxns(t.transactions);
       txnsRef.current = t.transactions;
       setAlerts(a.alerts);
       setLag(l.lag);
-      setStats(s);
+      if (isExplicit || !statsRef.current) {
+        setStats(s);
+        statsRef.current = s;
+      }
       setConfig(c);
+      setBlockedTxns(bt.transactions || []);
       setConnected(true);
       setError(null);
     } catch (e) {
@@ -1624,22 +2113,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refreshData();
-    const id = setInterval(refreshData, POLL_MS);
+    refreshData(undefined, true);
+    const id = setInterval(() => refreshData(undefined, false), POLL_MS);
     return () => clearInterval(id);
   }, [refreshData]);
 
   function handleTimeRange(r) {
     setTimeRange(r);
     timeRangeRef.current = r;
-    refreshData(r);
+    refreshData(r, true);
   }
 
   async function handleRefresh() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await refreshData();
+      await refreshData(undefined, true);
     } finally {
       setRefreshing(false);
     }
@@ -1651,7 +2140,7 @@ export default function App() {
       await transactionAction(eventId, actionType);
       addToast("success", `Transaction ${actionType === "approve" ? "approved and settled" : "declined"} successfully.`);
       setSelectedTxnId(null);
-      await refreshData();
+      await refreshData(undefined, true);
     } catch (e) {
       addToast("error", `Action failed: ${e.message}`);
     } finally {
@@ -1666,8 +2155,22 @@ export default function App() {
                          return { event_id: a.event_id, from_account: a.from_account, to_account: a.to_account, amount: a.amount, status: a.action === "VERIFY" ? "held" : "blocked", created_at: a.flagged_at };
                        })();
 
-  const heldCount    = txns.filter((t) => t.status === "held").length;
-  const blockedCount = txns.filter((t) => t.status === "blocked").length;
+  // Use cumulative stats counts for nav badges (matches what Risk Intelligence / Alerts pages show)
+  const actionHeldList  = (txns || []).filter((t) => t.status === "held");
+  const alertHeldList   = (alerts || []).filter((a) => a.action === "VERIFY" || a.risk_level === "MEDIUM");
+  const recentHeldLocal = Math.max(actionHeldList.length, alertHeldList.length);
+  const heldCount       = stats?.heldCount != null
+    ? Math.max(Number(stats.heldCount), recentHeldLocal)
+    : recentHeldLocal;
+
+  const recentBlockedLocal = Math.max(
+    (blockedTxns || []).length,
+    (alerts || []).filter((a) => a.risk_level === "HIGH" || a.action === "BLOCK" || a.status === "blocked").length,
+    (txns || []).filter((t) => t.status === "blocked").length
+  );
+  const blockedCount = stats?.blockedCount != null
+    ? Math.max(Number(stats.blockedCount), recentBlockedLocal)
+    : recentBlockedLocal;
 
   function scrollTop() {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1700,7 +2203,7 @@ export default function App() {
           timeRange={timeRange} onTimeRange={handleTimeRange}
           connected={connected}
           onNav={goTo}
-          onSeed={() => handleSeedDemoData(1)}
+          onSeed={handleSeedDemoData}
           seeding={seeding}
           demo={demo}
           recentlySent={justSent}
@@ -1717,19 +2220,19 @@ export default function App() {
           <div className="workspace-body">
             <div className="container">
               {page === "Transactions" && (
-                <LiveTransactionsPage txns={txns} alerts={alerts} config={config} onSelectTxn={(id) => setSelectedTxnId(id)} selectedTxnId={selectedTxnId} recentlySent={justSent} />
+                <LiveTransactionsPage alerts={alerts} config={config} onSelectTxn={(id) => setSelectedTxnId(id)} selectedTxnId={selectedTxnId} recentlySent={justSent} timeRange={timeRange} stats={stats} />
               )}
               {page === "Send Transaction" && (
                 <SendTransactionPage balances={balances} config={config} connected={connected} onSend={handleSendTransaction} send={send} onNavigate={goTo} />
               )}
               {page === "Risk Intelligence" && (
-                <ReviewQueuePage txns={txns} alerts={alerts} config={config} onAction={handleAction} actionPending={actionPending} onSelectTxn={(id) => setSelectedTxnId(id)} />
+                <ReviewQueuePage alerts={alerts} config={config} stats={stats} onAction={handleAction} actionPending={actionPending} onSelectTxn={(id) => setSelectedTxnId(id)} timeRange={timeRange} />
               )}
               {page === "Alerts" && (
-                <BlockedPage txns={txns} alerts={alerts} config={config} stats={stats} />
+                <BlockedPage alerts={alerts} config={config} stats={stats} timeRange={timeRange} />
               )}
               {page === "Analytics" && (
-                <AnalyticsPage stats={stats} txns={txns} alerts={alerts} config={config} />
+                <AnalyticsPage stats={stats} txns={txns} alerts={alerts} config={config} timeRange={timeRange} onTimeRange={handleTimeRange} />
               )}
               {page === "Accounts" && (
                 <AccountsPage balances={balances} />

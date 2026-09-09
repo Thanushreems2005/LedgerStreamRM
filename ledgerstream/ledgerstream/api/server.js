@@ -94,45 +94,49 @@ app.get("/api/transactions", async (req, res) => {
     Number(req.query.limit) || 50,
     MAX_LIMIT
   );
+  // offset enables historical pagination without loading all rows into the browser.
+  // Clamped to a non-negative integer; defaults to 0 (existing behaviour).
+  const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
   const since = rangeSince(req);
+  const statusParam = req.query.status;
+  const validStatuses = ["applied", "held", "blocked", "declined"];
+  const targetStatus = validStatuses.includes(statusParam) ? statusParam : null;
+
   try {
-    const { rows } = since
-      ? await pool.query(
-          `SELECT event_id, from_account, to_account, amount, status, error_reason,
-                  risk_score, risk_level, reasons,
-                  CASE
-                    WHEN amount < $3 THEN '${AMOUNT_BANDS[0].label}'
-                    WHEN amount <= $4 THEN '${AMOUNT_BANDS[1].label}'
-                    WHEN amount <= $5 THEN '${AMOUNT_BANDS[2].label}'
-                    ELSE '${AMOUNT_BANDS[3].label}'
-                  END AS amount_band,
-                  created_at AT TIME ZONE 'UTC' AS created_at
-           FROM transactions_log
-           WHERE created_at >= now() - $2::interval
-           ORDER BY created_at DESC
-           LIMIT $1`,
-          [limit, since, AMOUNT_BANDS[0].max, AMOUNT_BANDS[1].max, AMOUNT_BANDS[2].max]
-        )
-      : await pool.query(
-          `SELECT event_id, from_account, to_account, amount, status, error_reason,
-                  risk_score, risk_level, reasons,
-                  CASE
-                    WHEN amount < $2 THEN '${AMOUNT_BANDS[0].label}'
-                    WHEN amount <= $3 THEN '${AMOUNT_BANDS[1].label}'
-                    WHEN amount <= $4 THEN '${AMOUNT_BANDS[2].label}'
-                    ELSE '${AMOUNT_BANDS[3].label}'
-                  END AS amount_band,
-                  created_at AT TIME ZONE 'UTC' AS created_at
-           FROM transactions_log
-           ORDER BY created_at DESC
-           LIMIT $1`,
-          [limit, AMOUNT_BANDS[0].max, AMOUNT_BANDS[1].max, AMOUNT_BANDS[2].max]
-        );
+    const params = [limit, AMOUNT_BANDS[0].max, AMOUNT_BANDS[1].max, AMOUNT_BANDS[2].max, offset];
+    const whereClauses = [];
+
+    if (targetStatus) {
+      params.push(targetStatus);
+      whereClauses.push(`status = $${params.length}`);
+    }
+    if (since) {
+      params.push(since);
+      whereClauses.push(`created_at >= now() - $${params.length}::interval`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    const queryText = `SELECT event_id, from_account, to_account, amount, status, error_reason,
+                              risk_score, risk_level, reasons,
+                              CASE
+                                WHEN amount < $2 THEN '${AMOUNT_BANDS[0].label}'
+                                WHEN amount <= $3 THEN '${AMOUNT_BANDS[1].label}'
+                                WHEN amount <= $4 THEN '${AMOUNT_BANDS[2].label}'
+                                ELSE '${AMOUNT_BANDS[3].label}'
+                              END AS amount_band,
+                              created_at AT TIME ZONE 'UTC' AS created_at
+                       FROM transactions_log
+                       ${whereSql}
+                       ORDER BY created_at DESC
+                       LIMIT $1 OFFSET $5`;
+
+    const { rows } = await pool.query(queryText, params);
     res.json({ ok: true, transactions: rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
+
 
 app.get("/api/alerts", (_req, res) => {
   try {

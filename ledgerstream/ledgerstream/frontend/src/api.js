@@ -18,7 +18,7 @@ async function post(path, body) {
 }
 
 export const fetchBalances = () => get("/balances");
-export const fetchTransactions = (limit = 50, range) => get(`/transactions?limit=${limit}${range ? `&range=${range}` : ""}`);
+export const fetchTransactions = (limit = 50, range, status, offset = 0) => get(`/transactions?limit=${limit}&offset=${offset}${range ? `&range=${range}` : ""}${status ? `&status=${status}` : ""}`);
 export const fetchAlerts = () => get("/alerts");
 export const fetchLag = () => get("/lag");
 export const fetchStats = (range) => get(range ? `/stats?range=${range}` : "/stats");

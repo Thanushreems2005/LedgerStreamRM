@@ -2030,6 +2030,62 @@ select.filter-input option {
   color: var(--charcoal);
 }
 
+/* ── Pagination bar ─────────────────────────────── */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 4px;
+  flex-wrap: wrap;
+}
+
+.pagination-info {
+  font-size: 11.5px;
+  color: var(--slate);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--cream-3);
+  color: var(--charcoal);
+  border-radius: 10px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  background: var(--emerald);
+  border-color: var(--emerald);
+  color: #fff;
+}
+
+.pagination-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.pagination-page {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--charcoal);
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+
 .empty-state {
   padding: 48px 24px;
   text-align: center;
@@ -2644,4 +2700,207 @@ select.filter-input option {
 .data-table tbody tr.just-now:hover td,
 .data-table tbody tr.just-now:hover td:first-child,
 .data-table tbody tr.just-now:hover td:nth-of-type(odd) { background: rgba(16, 185, 129, 0.14); }
+
+/* =========================================================
+   ANALYTICS PAGE REDESIGN STYLES
+   ========================================================= */
+.score-landscape-bands {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.score-band-row {
+  background: var(--cream);
+  border: 1px solid var(--cream-3);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.score-band-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.score-band-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.score-band-badge.low {
+  background: var(--green-bg);
+  color: var(--green-text);
+  border: 1px solid var(--green-bd);
+}
+
+.score-band-badge.medium {
+  background: var(--amber-bg);
+  color: #92400E;
+  border: 1px solid var(--amber-bd);
+}
+
+.score-band-badge.high {
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid var(--red-bd);
+}
+
+.score-band-range {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--charcoal);
+  font-weight: 600;
+}
+
+.score-band-action {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--slate);
+  letter-spacing: 0.04em;
+}
+
+.score-band-bar-wrap {
+  width: 100%;
+  height: 8px;
+  background: var(--cream-3);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.score-band-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.score-band-fill.low { background: var(--green); }
+.score-band-fill.medium { background: var(--amber); }
+.score-band-fill.high { background: var(--red); }
+
+.score-band-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--charcoal);
+  font-weight: 500;
+}
+
+.score-pipeline-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--slate);
+  letter-spacing: 0.06em;
+  text-align: center;
+  padding: 8px 12px;
+  background: var(--cream);
+  border: 1px dashed var(--cream-3);
+  border-radius: 8px;
+}
+
+.outcomes-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.outcome-card {
+  background: var(--cream);
+  border: 1px solid var(--cream-3);
+  border-radius: 16px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.outcome-card.approved { border-left: 4px solid var(--green); }
+.outcome-card.held { border-left: 4px solid var(--amber); }
+.outcome-card.blocked { border-left: 4px solid var(--red); }
+
+.outcome-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.outcome-moved {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.outcome-moved.yes {
+  background: var(--green-bg);
+  color: var(--green-text);
+}
+
+.outcome-moved.no {
+  background: rgba(100, 112, 106, 0.12);
+  color: var(--slate);
+}
+
+.outcome-value {
+  font-size: 22px;
+  font-weight: 800;
+  font-family: var(--mono);
+  color: var(--charcoal);
+  letter-spacing: -0.02em;
+}
+
+.outcome-meta {
+  font-size: 12px;
+  color: var(--slate);
+  line-height: 1.4;
+}
+
+.policy-compact-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.policy-pill-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--cream);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--cream-3);
+}
+
+.policy-pill-score {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--charcoal);
+}
+
+.policy-compact-note {
+  font-size: 12px;
+  color: var(--slate);
+  line-height: 1.5;
+}
+
+@media (max-width: 860px) {
+  .outcomes-grid {
+    grid-template-columns: 1fr;
+  }
+}
 
