@@ -89,7 +89,7 @@ jobs:
 
       - name: Start Express API server
         run: |
-          node server.js &
+          nohup node server.js > api.log 2>&1 &
         working-directory: ledgerstream/ledgerstream/api
         env:
           PGPORT: 5433
@@ -100,12 +100,15 @@ jobs:
           for i in {1..30}; do
             if curl -s http://localhost:3001/api/health | grep -q '"status":"ok"'; then
               echo "Express API is ready!"
+              cat ledgerstream/ledgerstream/api/api.log || true
               exit 0
             fi
             echo "Waiting for Express API..."
             sleep 1
           done
           echo "Express API failed to ready within 30 seconds"
+          echo "--- API LOG ---"
+          cat ledgerstream/ledgerstream/api/api.log || true
           exit 1
 
       - name: Validate Python syntax
