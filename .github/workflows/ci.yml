@@ -83,6 +83,11 @@ jobs:
           echo "Kafka failed to ready within 30 seconds"
           exit 1
 
+      - name: Create Kafka topics
+        run: |
+          docker exec $(docker ps -q --filter ancestor=confluentinc/cp-kafka:7.6.0) kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists --topic fraud-alerts --partitions 1 --replication-factor 1
+          docker exec $(docker ps -q --filter ancestor=confluentinc/cp-kafka:7.6.0) kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists --topic transactions --partitions 1 --replication-factor 1
+
       - name: Initialize PostgreSQL database schema
         run: |
           PGPASSWORD=ledger psql -h localhost -p 5433 -U ledger -d ledgerstream -f ledgerstream/ledgerstream/init-db/schema.sql
