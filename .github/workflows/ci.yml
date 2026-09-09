@@ -26,6 +26,27 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      kafka:
+        image: confluentinc/cp-kafka:7.6.0
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+          CLUSTER_ID: "lZWk5Yw0Tiq9ONZadOe9oA=="
+        ports:
+          - 9092:9092
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 10
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -48,6 +69,19 @@ jobs:
       - name: Install API dependencies
         run: npm ci
         working-directory: ledgerstream/ledgerstream/api
+
+      - name: Wait for Kafka readiness
+        run: |
+          for i in {1..30}; do
+            if docker exec $(docker ps -q --filter ancestor=confluentinc/cp-kafka:7.6.0) kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+              echo "Kafka is fully ready and responding to kafka-topics!"
+              exit 0
+            fi
+            echo "Waiting for Kafka..."
+            sleep 1
+          done
+          echo "Kafka failed to ready within 30 seconds"
+          exit 1
 
       - name: Initialize PostgreSQL database schema
         run: |
@@ -120,3 +154,4 @@ jobs:
       - name: Build Docker image
         run: |
           docker build -t ledgerstream-rm:ci -f ledgerstream/ledgerstream/Dockerfile ledgerstream/ledgerstream
+
