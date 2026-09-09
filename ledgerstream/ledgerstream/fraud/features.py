@@ -102,7 +102,7 @@ def build_feature_vector(event: dict, history) -> np.ndarray:
 
     Returns a ``(1, 6)`` float array ordered exactly like FEATURE_NAMES.
     """
-    current_ts = datetime.fromisoformat(event["timestamp"])
+    current_ts = datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
     amount = float(event["amount"])
     hour = float(current_ts.hour)
 
@@ -113,7 +113,7 @@ def build_feature_vector(event: dict, history) -> np.ndarray:
     window_cutoff = current_ts - timedelta(seconds=VELOCITY_WINDOW_SECONDS)
     window_amounts = []
     for ts_str, amt in history:
-        ts = datetime.fromisoformat(ts_str)
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
         if ts >= window_cutoff:
             window_amounts.append(float(amt))
 
