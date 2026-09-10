@@ -9,7 +9,7 @@ ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
 
 # --- Stage 2: Final Multi-Process Runner Container ---
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Install system dependencies, Node.js runtime, and build-essential for compiling wheels
 RUN apt-get update && apt-get install -y curl gnupg libpq-dev gcc g++ make && \
