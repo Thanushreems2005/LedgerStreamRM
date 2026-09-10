@@ -2160,7 +2160,7 @@ export default function App() {
   const alertHeldList   = (alerts || []).filter((a) => a.action === "VERIFY" || a.risk_level === "MEDIUM");
   const recentHeldLocal = Math.max(actionHeldList.length, alertHeldList.length);
   const heldCount       = stats?.heldCount != null
-    ? Math.max(Number(stats.heldCount), recentHeldLocal)
+    ? Number(stats.heldCount)
     : recentHeldLocal;
 
   const recentBlockedLocal = Math.max(
