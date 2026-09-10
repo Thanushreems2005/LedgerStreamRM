@@ -1,10 +1,11 @@
 const { Pool } = require("pg");
 
-// Support DATABASE_URL connection string directly (used by Railway),
+// Support DATABASE_URL or PG_DSN connection string directly,
 // otherwise fall back to local connection parameters.
+const connectionString = process.env.DATABASE_URL || process.env.PG_DSN;
 const pool = new Pool(
-  process.env.DATABASE_URL
-    ? { connectionString: process.env.DATABASE_URL }
+  connectionString
+    ? { connectionString }
     : {
         database: "ledgerstream",
         user: "ledger",
