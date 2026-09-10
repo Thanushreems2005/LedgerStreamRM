@@ -176,7 +176,7 @@ function TopNav({ page, onNav, heldCount, blockedCount, connected }) {
       <div className="topnav-wrap">
         <nav className="topnav">
           <div className="brand">
-            <div className="brand-mark">LS</div>
+            <div className="brand-mark"><img src="/logo.svg" alt="LedgerStream RM Logo" style={{ width: "100%", height: "100%", borderRadius: "inherit" }} /></div>
             Ledger<span>Stream</span>
           </div>
           <div className="topnav-center">
@@ -1907,7 +1907,7 @@ function Footer({ onNav }) {
     <footer className="footer">
       <div className="container">
         <div className="brand" style={{ fontSize: 13 }}>
-          <div className="brand-mark" style={{ width: 24, height: 24, fontSize: 10 }}>LS</div>
+          <div className="brand-mark" style={{ width: 24, height: 24 }}><img src="/logo.svg" alt="LedgerStream RM Logo" style={{ width: "100%", height: "100%", borderRadius: "inherit" }} /></div>
           Ledger<span>Stream</span> RM
         </div>
         <div className="footer-links">
@@ -2155,22 +2155,9 @@ export default function App() {
                          return { event_id: a.event_id, from_account: a.from_account, to_account: a.to_account, amount: a.amount, status: a.action === "VERIFY" ? "held" : "blocked", created_at: a.flagged_at };
                        })();
 
-  // Use cumulative stats counts for nav badges (matches what Risk Intelligence / Alerts pages show)
-  const actionHeldList  = (txns || []).filter((t) => t.status === "held");
-  const alertHeldList   = (alerts || []).filter((a) => a.action === "VERIFY" || a.risk_level === "MEDIUM");
-  const recentHeldLocal = Math.max(actionHeldList.length, alertHeldList.length);
-  const heldCount       = stats?.heldCount != null
-    ? Number(stats.heldCount)
-    : recentHeldLocal;
-
-  const recentBlockedLocal = Math.max(
-    (blockedTxns || []).length,
-    (alerts || []).filter((a) => a.risk_level === "HIGH" || a.action === "BLOCK" || a.status === "blocked").length,
-    (txns || []).filter((t) => t.status === "blocked").length
-  );
-  const blockedCount = stats?.blockedCount != null
-    ? Math.max(Number(stats.blockedCount), recentBlockedLocal)
-    : recentBlockedLocal;
+  // Use backend stats counts for nav badges (matches Risk Intelligence / Alerts pages)
+  const heldCount    = stats?.heldCount != null ? Number(stats.heldCount) : 0;
+  const blockedCount = stats?.blockedCount != null ? Number(stats.blockedCount) : 0;
 
   function scrollTop() {
     window.scrollTo({ top: 0, behavior: "smooth" });

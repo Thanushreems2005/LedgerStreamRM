@@ -114,16 +114,12 @@ button, input, select {
   width: 30px;
   height: 30px;
   border-radius: 9px;
-  background: linear-gradient(135deg, #10b981, #047857);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #04231b;
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  box-shadow: 0 4px 12px #10b98159;
+  box-shadow: 0 4px 12px #10b9813d;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .brand span {
