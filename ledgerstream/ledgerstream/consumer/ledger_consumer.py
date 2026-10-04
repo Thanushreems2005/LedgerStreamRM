@@ -232,23 +232,28 @@ def apply_transfer(conn, event: dict, risk_level: str, action: str, score: float
 
     with conn.cursor() as cur:
         if action == "APPROVE":  # LOW Risk
-            # Lock the sender's row to prevent a race against a concurrent transfer
-            cur.execute("SELECT balance FROM accounts WHERE account_id = %s FOR UPDATE", (from_acc,))
-            row = cur.fetchone()
-            if row is None:
+            # Lock BOTH rows in a fixed (sorted) order. This stops the receiver row
+            # vanishing mid-transfer and avoids deadlocks between opposite transfers.
+            cur.execute(
+                "SELECT account_id, balance FROM accounts "
+                "WHERE account_id IN (%s, %s) ORDER BY account_id FOR UPDATE",
+                (from_acc, to_acc),
+            )
+            locked = dict(cur.fetchall())
+            if from_acc not in locked:
                 raise ValueError(f"unknown_account:{from_acc}")
-            sender_balance = row[0]
-
-            cur.execute("SELECT 1 FROM accounts WHERE account_id = %s", (to_acc,))
-            if cur.fetchone() is None:
+            if to_acc not in locked:
                 raise ValueError(f"unknown_account:{to_acc}")
-
-            if sender_balance < amount:
+            if locked[from_acc] < amount:
                 raise ValueError("insufficient_balance")
 
             cur.execute("UPDATE accounts SET balance = balance - %s WHERE account_id = %s", (amount, from_acc))
+            if cur.rowcount != 1:
+                raise RuntimeError(f"debit_rowcount:{cur.rowcount}")
             cur.execute("UPDATE accounts SET balance = balance + %s WHERE account_id = %s", (amount, to_acc))
-            
+            if cur.rowcount != 1:
+                raise RuntimeError(f"credit_rowcount:{cur.rowcount}")
+
             db_status = "applied"
         elif action == "VERIFY":  # MEDIUM Risk -> HOLD
             # Verify accounts exist
@@ -440,5 +445,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
