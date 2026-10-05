@@ -295,28 +295,34 @@ app.post("/api/transactions/:event_id/approve", async (req, res) => {
 
     const { from_account, to_account, amount } = tx;
 
-    // Lock the sender's row
-    const senderRes = await client.query(
-      "SELECT balance FROM accounts WHERE account_id = $1 FOR UPDATE",
-      [from_account]
+    // Lock BOTH account rows in a fixed (sorted) order. Stops the receiver
+    // vanishing mid-transfer and avoids deadlocks with the consumer.
+    const lockRes = await client.query(
+      "SELECT account_id, balance FROM accounts WHERE account_id = ANY($1) ORDER BY account_id FOR UPDATE",
+      [[from_account, to_account]]
     );
-    if (senderRes.rows.length === 0) {
+    const locked = new Map(lockRes.rows.map((r) => [r.account_id, Number(r.balance)]));
+    if (!locked.has(from_account)) {
       throw new Error(`Sender account ${from_account} not found`);
     }
-    const balance = Number(senderRes.rows[0].balance);
-    if (balance < Number(amount)) {
+    if (!locked.has(to_account)) {
+      throw new Error(`Receiver account ${to_account} not found`);
+    }
+    if (locked.get(from_account) < Number(amount)) {
       throw new Error("Insufficient balance");
     }
 
-    // Apply debit/credit
-    await client.query(
+    // Apply debit/credit, and fail loudly if either touches anything but 1 row
+    const debit = await client.query(
       "UPDATE accounts SET balance = balance - $1 WHERE account_id = $2",
       [amount, from_account]
     );
-    await client.query(
+    if (debit.rowCount !== 1) throw new Error(`debit_rowcount:${debit.rowCount}`);
+    const credit = await client.query(
       "UPDATE accounts SET balance = balance + $1 WHERE account_id = $2",
       [amount, to_account]
     );
+    if (credit.rowCount !== 1) throw new Error(`credit_rowcount:${credit.rowCount}`);
 
     // Update statuses to 'applied'
     await client.query(
